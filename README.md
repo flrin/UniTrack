@@ -18,8 +18,8 @@ pip install "fastapi[standard]"
 fastapi dev main.py
 ```
 
-# 🤖 AI SYSTEM PROMPT & PROJECT CONTEXT
-**ION AI AGENTS (Cursor, Copilot, Claude):** Read this entire document before generating code. Do not hallucinate API endpoints, data models, or tech stack choices. Stick strictly to the architecture, schemas, and contracts defined below.
+# PROJECT CONTEXT
+**Read this entire document before generating code. Do not hallucinate API endpoints, data models, or tech stack choices. Stick strictly to the architecture, schemas, and contracts defined below.
 
 ## Project Overview
 A role-based web application for automated university attendance using HTML5 Geolocation. 
@@ -169,6 +169,26 @@ Frontend and Backend teams must adhere to these exact endpoints and payloads.
 
 * **Endpoint:** `GET /api/teacher/classes`
 * **Endpoint:** `GET /api/teacher/roster/{class_id}`
+
+## UI/UX & Thematic Guidelines
+All frontend components must strictly adhere to a unified "Clean Light Blue" design system. Do not invent custom color palettes, CSS frameworks, or dark mode overrides. Use standard Tailwind CSS classes (or equivalent raw CSS) matching these exact specifications:
+
+*   **Global Theme:** Strictly Light Mode. Do not write or generate `dark:` class variants.
+*   **Color Palette:**
+    *   **App Background:** Off-white with a subtle cool tint (e.g., Tailwind `bg-slate-50` or `#F8FAFC`).
+    *   **Primary Accent:** Vibrant sky blue for primary actions, active states, and headers (e.g., `bg-sky-500` or `#0EA5E9`). Hover states should be slightly darker (`hover:bg-sky-600`).
+    *   **Text:** Dark slate for primary readability (`text-slate-800`); medium gray for secondary labels (`text-slate-500`).
+*   **Cards & Layout:** 
+    *   Wrap schedules, the Leaflet map, and the roster table in crisp white containers with subtle shadows and rounded corners (`bg-white rounded-xl shadow-sm border border-slate-100`).
+    *   Maintain consistent padding (e.g., `p-6`) inside all cards.
+*   **Buttons & Inputs:**
+    *   **Primary Buttons:** Solid sky blue, white text, medium font weight (`bg-sky-500 text-white rounded-lg px-4 py-2 font-medium`).
+    *   **Form Inputs (Config Modal):** White background, light gray borders, with a sky blue focus ring (`border-slate-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-100 outline-none`).
+*   **Typography:** Use a standard, modern sans-serif stack (e.g., Inter, Roboto, or system-ui). 
+*   **Status Badges:** Use specific colors for attendance states to contrast against the blue theme:
+    *   Present / Tracking Active: `text-emerald-600 bg-emerald-50`
+    *   Pending / Waiting: `text-slate-600 bg-slate-100`
+    *   Left Early / Warning Banner: `text-rose-700 bg-rose-50`
 
 ## AI Development Directives
 
