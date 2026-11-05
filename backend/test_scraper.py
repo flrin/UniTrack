@@ -1,14 +1,19 @@
+import os
 import unittest
-from datetime import datetime
+from datetime import date, datetime
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from database import Base, SessionLocal, engine
 from main import app
 from models import AttendanceRecord, ClassSession, User
 from scraper import (
+    _GEOCODE_CACHE,
     assemble_class_sessions,
     get_building_coords,
+    get_first_semester_monday,
     normalize_time,
+    refresh_schedule,
     scrape_classrooms,
     scrape_student_schedule,
     scrape_teacher_schedule,
@@ -21,24 +26,64 @@ class TestUniTrackScraper(unittest.TestCase):
     def setUp(self):
         Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
+        self.db.query(AttendanceRecord).delete()
+        self.db.query(ClassSession).delete()
+        self.db.query(User).delete()
+        self.db.commit()
+        _GEOCODE_CACHE.clear()
 
     def tearDown(self):
+        self.db.query(AttendanceRecord).delete()
+        self.db.query(ClassSession).delete()
+        self.db.query(User).delete()
+        self.db.commit()
         self.db.close()
 
     # -----------------------------------------------------------------------
     # Sub-issue 21: Room Geocoding & Legenda Parsing
     # -----------------------------------------------------------------------
     def test_building_geocoding(self):
-        # Univ Dimitrie Cantemir from README specification
+        # Fallback coordinates for Univ Dimitrie Cantemir from README specification
         lat, lng, bld = get_building_coords("Univ Dimitrie Cantemir, etaj 5 (str. Teodor Mihali nr. 56)")
         self.assertAlmostEqual(lat, 46.5743, places=3)
         self.assertAlmostEqual(lng, 23.7841, places=3)
         self.assertIn("Cantemir", bld)
 
-        # FSEGA
+        # Fallback coordinates for FSEGA
         fsega_lat, fsega_lng, _ = get_building_coords("Cladirea FSEGA, etaj 3 (str. Teodor Mihali, nr. 58-60)")
         self.assertAlmostEqual(fsega_lat, 46.7732, places=3)
         self.assertAlmostEqual(fsega_lng, 23.6236, places=3)
+
+    @patch("httpx.Client.get")
+    def test_building_geocoding_google_maps_api(self, mock_get):
+        # Primary retrieval via Google Maps Geocoding API
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "OK",
+            "results": [
+                {
+                    "geometry": {"location": {"lat": 46.771234, "lng": 23.601234}},
+                    "formatted_address": "Google Geocoded Campus, Cluj-Napoca, Romania",
+                }
+            ],
+        }
+        mock_get.return_value = mock_resp
+
+        lat, lng, bld = get_building_coords("Sala Noua Campus", api_key="fake-google-api-key")
+        self.assertAlmostEqual(lat, 46.771234, places=5)
+        self.assertAlmostEqual(lng, 23.601234, places=5)
+        self.assertEqual(bld, "Google Geocoded Campus, Cluj-Napoca, Romania")
+
+    @patch("httpx.Client.get")
+    def test_building_geocoding_api_failure_fallback(self, mock_get):
+        # When Google Maps API fails, fall back to known hardcoded coordinates
+        mock_get.side_effect = Exception("API connection error")
+
+        lat, lng, bld = get_building_coords("Cladirea FSEGA", api_key="fake-key")
+        self.assertAlmostEqual(lat, 46.7732, places=3)
+        self.assertAlmostEqual(lng, 23.6236, places=3)
+        self.assertEqual(bld, "Cladirea FSEGA")
 
     def test_scrape_classrooms(self):
         rooms = scrape_classrooms()
@@ -53,12 +98,10 @@ class TestUniTrackScraper(unittest.TestCase):
     def test_scrape_student_schedule(self):
         classes = scrape_student_schedule()
         self.assertGreater(len(classes), 50)
-        # Check subgroup formatia values exist
         groups = {c["formatia"] for c in classes}
         self.assertTrue(any("931" in g for g in groups))
         self.assertTrue(any("/1" in g or "/2" in g for g in groups))
 
-        # Check required fields exist on every item
         sample = classes[0]
         for field in ["base_group", "day", "hours", "room", "formatia", "subject", "class_type"]:
             self.assertIn(field, sample)
@@ -82,16 +125,39 @@ class TestUniTrackScraper(unittest.TestCase):
     # Sub-issue 24: Data Normalization & Database Seeding
     # -----------------------------------------------------------------------
     def test_normalize_time(self):
-        start_dt, end_dt, display = normalize_time("Luni", "10-12")
+        # 2026: October 1 is Thursday; first semester week Monday is 2026-09-28
+        mon_first_week = get_first_semester_monday(2026)
+        self.assertEqual(mon_first_week, date(2026, 9, 28))
+
+        start_dt, end_dt, display = normalize_time("Luni", "10-12", academic_year=2026)
+        self.assertEqual(start_dt.year, 2026)
+        self.assertEqual(start_dt.month, 9)
+        self.assertEqual(start_dt.day, 28)
         self.assertEqual(start_dt.hour, 10)
         self.assertEqual(end_dt.hour, 12)
         self.assertEqual(display, "10:00 AM - 12:00 PM")
 
-        # Test Friday (matches README 2026-10-30 date)
-        start_fri, end_fri, _ = normalize_time("Vineri", "14-16")
-        self.assertEqual(start_fri.day, 30)
+        # Friday of the first semester week: 2026-10-02
+        start_fri, end_fri, _ = normalize_time("Vineri", "14-16", academic_year=2026)
+        self.assertEqual(start_fri.year, 2026)
+        self.assertEqual(start_fri.month, 10)
+        self.assertEqual(start_fri.day, 2)
         self.assertEqual(start_fri.hour, 14)
         self.assertEqual(end_fri.hour, 16)
+
+        # Configurable academic year (2025: Oct 1 is Wednesday -> Monday is 2025-09-29)
+        start_2025, _, _ = normalize_time("Luni", "8-10", academic_year=2025)
+        self.assertEqual(start_2025.year, 2025)
+        self.assertEqual(start_2025.month, 9)
+        self.assertEqual(start_2025.day, 29)
+
+        # Configurable via ACADEMIC_YEAR environment variable
+        with patch.dict(os.environ, {"ACADEMIC_YEAR": "2027"}):
+            # 2027: Oct 1 is Friday -> Monday is 2027-09-27
+            start_env, _, _ = normalize_time("Luni", "8-10")
+            self.assertEqual(start_env.year, 2027)
+            self.assertEqual(start_env.month, 9)
+            self.assertEqual(start_env.day, 27)
 
     def test_assemble_class_sessions(self):
         raw = [
@@ -115,7 +181,7 @@ class TestUniTrackScraper(unittest.TestCase):
                 "target_lng": 23.7841,
             }
         }
-        sessions = assemble_class_sessions(raw, rooms, optional_subjects_set=set())
+        sessions = assemble_class_sessions(raw, rooms, optional_subjects_set=set(), academic_year=2026)
         self.assertEqual(len(sessions), 1)
         s = sessions[0]
         self.assertEqual(s["subject"], "Interactiunea om-calculator")
@@ -123,19 +189,21 @@ class TestUniTrackScraper(unittest.TestCase):
         self.assertEqual(s["target_lat"], 46.5743)
         self.assertFalse(s["is_optional"])
 
-    def test_seed_database_and_api(self):
+        # Check deterministic ID stability
+        sessions_again = assemble_class_sessions(raw, rooms, optional_subjects_set=set(), academic_year=2026)
+        self.assertEqual(sessions[0]["id"], sessions_again[0]["id"])
+
+    def test_seed_database_and_refresh_preserves_attendance(self):
         result = seed_database(db=self.db)
         self.assertEqual(result["status"], "success")
         self.assertGreater(result["sessions_seeded"], 50)
         self.assertGreater(result["users_seeded"], 0)
 
-        # Check seeded student user exists
         student = self.db.query(User).filter_by(role="student").first()
         self.assertIsNotNone(student)
         self.assertEqual(student.name, "John Doe")
         self.assertEqual(student.group, "933/1")
 
-        # Test re-seeding safely when attendance records exist (finding 1)
         session = self.db.query(ClassSession).first()
         record = AttendanceRecord(
             id="test-att-1",
@@ -146,10 +214,24 @@ class TestUniTrackScraper(unittest.TestCase):
         self.db.add(record)
         self.db.commit()
 
+        # refresh_schedule must NOT destroy attendance data
+        refresh_result = refresh_schedule(db=self.db)
+        self.assertEqual(refresh_result["status"], "success")
+        self.assertEqual(refresh_result["attendance_records_preserved"], 1)
+
+        saved_record = self.db.query(AttendanceRecord).filter_by(id="test-att-1").first()
+        self.assertIsNotNone(saved_record)
+        self.assertEqual(saved_record.status, "Present")
+        self.assertEqual(saved_record.class_session_id, session.id)
+
+        # seed_database also preserves attendance data
         reseed_result = seed_database(db=self.db)
         self.assertEqual(reseed_result["status"], "success")
+        preserved = self.db.query(AttendanceRecord).filter_by(id="test-att-1").first()
+        self.assertIsNotNone(preserved)
+        self.assertEqual(preserved.status, "Present")
 
-        # Check API endpoint works and GET /api/seed is blocked (finding 2)
+    def test_api_endpoints(self):
         client = TestClient(app)
         resp = client.get("/")
         self.assertEqual(resp.status_code, 200)
@@ -160,6 +242,10 @@ class TestUniTrackScraper(unittest.TestCase):
         post_seed = client.post("/api/seed")
         self.assertEqual(post_seed.status_code, 200)
         self.assertEqual(post_seed.json()["status"], "success")
+
+        post_refresh = client.post("/api/schedule/refresh")
+        self.assertEqual(post_refresh.status_code, 200)
+        self.assertEqual(post_refresh.json()["status"], "success")
 
 
 if __name__ == "__main__":

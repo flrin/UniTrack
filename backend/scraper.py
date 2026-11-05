@@ -1,4 +1,5 @@
 import io
+import os
 import re
 import uuid
 from datetime import datetime, date, timedelta, timezone
@@ -45,41 +46,87 @@ SPECIALIZATION_CODE_MAP = {
 }
 
 
-def get_building_coords(location_str: str) -> Tuple[float, float, str]:
-    """Map a classroom location string to GPS coordinates (target_lat, target_lng) and building name."""
+_GEOCODE_CACHE: Dict[str, Tuple[float, float, str]] = {}
+
+
+def get_building_coords(
+    location_str: str, api_key: Optional[str] = None
+) -> Tuple[float, float, str]:
+    """
+    Map a classroom location string to GPS coordinates (target_lat, target_lng) and building name.
+    Retrieves coordinates primarily via Google Maps Geocoding API if an API key is available,
+    falling back to known campus building coordinates.
+    """
     loc = location_str.lower().strip()
     if not loc or "neprecizata" in loc or "virtual" in loc:
         # Default university coordinates
         return 46.7679, 23.5898, location_str or "Cladirea Centrala UBB"
 
+    if location_str in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[location_str]
+
+    # Primary method: Google Maps Geocoding API
+    gmaps_key = (
+        api_key
+        or os.getenv("GOOGLE_MAPS_API_KEY")
+        or os.getenv("GOOGLE_GEOCODING_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
+    if gmaps_key:
+        try:
+            address_query = location_str
+            if "cluj" not in address_query.lower():
+                address_query = f"{address_query}, Cluj-Napoca, Romania"
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(
+                    "https://maps.googleapis.com/maps/api/geocode/json",
+                    params={"address": address_query, "key": gmaps_key},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("status") == "OK" and data.get("results"):
+                        res = data["results"][0]
+                        lat = float(res["geometry"]["location"]["lat"])
+                        lng = float(res["geometry"]["location"]["lng"])
+                        bld = res.get("formatted_address") or location_str
+                        result = (lat, lng, bld)
+                        _GEOCODE_CACHE[location_str] = result
+                        return result
+        except Exception:
+            pass  # Fall back to hardcoded campus building coordinates
+
+    # Fallback coordinates for known faculty locations
     if "cantemir" in loc:
         # Exact building & coords from project README
-        return 46.5743, 23.7841, "Univ Dimitrie Cantemir, etaj 5"
-    if "fsega" in loc or "iot" in loc:
-        return 46.7732, 23.6236, "Cladirea FSEGA"
-    if "mathematica" in loc or "ploiesti" in loc:
-        return 46.7766, 23.5938, "Cladirea Mathematica"
-    if any(k in loc for k in ["ntt", "constanta", "socrate", "saturn", "platon"]):
-        return 46.7745, 23.5930, "NTT Data"
-    if "litere" in loc or "horea" in loc or any(k in loc for k in ["balzac", "cosbuc", "shakespeare"]):
-        return 46.7801, 23.5857, "Facultatea de Litere"
-    if "ciresilor" in loc or "observator" in loc:
-        return 46.7584, 23.5907, "Observatorul Astronomic"
-    if "avram iancu" in loc:
-        return 46.7672, 23.5912, "Cladirea Avram Iancu"
-    if "chimie" in loc or "arany" in loc:
-        return 46.7663, 23.5828, "Facultatea de Chimie"
-    if "sociologie" in loc or "saligny" in loc or "kulcsar" in loc:
-        return 46.7725, 23.5985, "Facultatea de Sociologie"
-    if "ioan bob" in loc:
-        return 46.7690, 23.5880, "Scoala Gimnaziala Ioan Bob"
-    if "codespring" in loc:
-        return 46.7712, 23.6015, "Sediul Codespring"
-    if "mhp" in loc:
-        return 46.7710, 23.6020, "Sediul MHP"
+        coords = (46.5743, 23.7841, "Univ Dimitrie Cantemir, etaj 5")
+    elif "fsega" in loc or "iot" in loc:
+        coords = (46.7732, 23.6236, "Cladirea FSEGA")
+    elif "mathematica" in loc or "ploiesti" in loc:
+        coords = (46.7766, 23.5938, "Cladirea Mathematica")
+    elif any(k in loc for k in ["ntt", "constanta", "socrate", "saturn", "platon"]):
+        coords = (46.7745, 23.5930, "NTT Data")
+    elif "litere" in loc or "horea" in loc or any(k in loc for k in ["balzac", "cosbuc", "shakespeare"]):
+        coords = (46.7801, 23.5857, "Facultatea de Litere")
+    elif "ciresilor" in loc or "observator" in loc:
+        coords = (46.7584, 23.5907, "Observatorul Astronomic")
+    elif "avram iancu" in loc:
+        coords = (46.7672, 23.5912, "Cladirea Avram Iancu")
+    elif "chimie" in loc or "arany" in loc:
+        coords = (46.7663, 23.5828, "Facultatea de Chimie")
+    elif "sociologie" in loc or "saligny" in loc or "kulcsar" in loc:
+        coords = (46.7725, 23.5985, "Facultatea de Sociologie")
+    elif "ioan bob" in loc:
+        coords = (46.7690, 23.5880, "Scoala Gimnaziala Ioan Bob")
+    elif "codespring" in loc:
+        coords = (46.7712, 23.6015, "Sediul Codespring")
+    elif "mhp" in loc:
+        coords = (46.7710, 23.6020, "Sediul MHP")
+    else:
+        # Default to Central UBB building on Kogalniceanu
+        coords = (46.7679, 23.5898, location_str or "Cladirea Centrala UBB")
 
-    # Default to Central UBB building on Kogalniceanu
-    return 46.7679, 23.5898, location_str or "Cladirea Centrala UBB"
+    _GEOCODE_CACHE[location_str] = coords
+    return coords
 
 
 def fetch_page_content(url: str, default_encoding: str = "utf-8") -> str:
@@ -102,7 +149,9 @@ def fetch_page_content(url: str, default_encoding: str = "utf-8") -> str:
 # ---------------------------------------------------------------------------
 # Issue #21: Parse Classrooms & Geocode
 # ---------------------------------------------------------------------------
-def scrape_classrooms(url: str = DEFAULT_CLASSROOMS_URL) -> Dict[str, Dict[str, Any]]:
+def scrape_classrooms(
+    url: str = DEFAULT_CLASSROOMS_URL, api_key: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
     """Parse Legenda salilor table into a dictionary of room code -> coordinates & building name."""
     html = fetch_page_content(url)
     soup = BeautifulSoup(html, "html.parser")
@@ -116,7 +165,7 @@ def scrape_classrooms(url: str = DEFAULT_CLASSROOMS_URL) -> Dict[str, Dict[str, 
         if len(tds) >= 2:
             room_code = tds[0]
             location_str = tds[1]
-            lat, lng, bld = get_building_coords(location_str)
+            lat, lng, bld = get_building_coords(location_str, api_key=api_key)
             rooms[room_code] = {
                 "room": room_code,
                 "building_name": location_str if location_str else bld,
@@ -300,17 +349,37 @@ def scrape_optional_courses(
 # ---------------------------------------------------------------------------
 # Issue #24: Data Normalization & Database Seeding
 # ---------------------------------------------------------------------------
+DEFAULT_ACADEMIC_YEAR = int(os.getenv("ACADEMIC_YEAR", "2026"))
+
+
+def get_first_semester_monday(academic_year: Optional[int] = None) -> date:
+    """
+    Returns the Monday of the first semester week.
+    The first semester week is defined as the Monday-Sunday week containing October 1.
+    """
+    year = (
+        academic_year
+        if academic_year is not None
+        else int(os.getenv("ACADEMIC_YEAR", str(DEFAULT_ACADEMIC_YEAR)))
+    )
+    oct1 = date(year, 10, 1)
+    return oct1 - timedelta(days=oct1.weekday())
+
+
 def normalize_time(
-    day_ro: str, hours_str: str, reference_monday: Optional[date] = None
+    day_ro: str,
+    hours_str: str,
+    reference_monday: Optional[date] = None,
+    academic_year: Optional[int] = None,
 ) -> Tuple[datetime, datetime, str]:
     """
     Normalizes 'Ziua' (e.g. 'Luni') and 'Orele' (e.g. '10-12') into standardized
     UTC datetime timestamps and display string (e.g. '10:00 AM - 12:00 PM').
-    Reference Monday defaults to 2026-10-26 (matching the semester in README).
+    Dates are relative to the first semester week (Monday-Sunday containing October 1)
+    for the configured academic year.
     """
     if reference_monday is None:
-        # 2026-10-26 is Monday; Friday 2026-10-30 matches README example date
-        reference_monday = date(2026, 10, 26)
+        reference_monday = get_first_semester_monday(academic_year)
 
     day_clean = day_ro.strip().lower()
     day_offset = RO_DAY_MAP.get(day_clean, 0)
@@ -339,6 +408,8 @@ def assemble_class_sessions(
     raw_classes: List[Dict[str, Any]],
     room_dict: Dict[str, Dict[str, Any]],
     optional_subjects_set: Set[str],
+    reference_monday: Optional[date] = None,
+    academic_year: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Merge schedule entries with room coordinates and optional subject flags."""
     sessions = []
@@ -351,7 +422,9 @@ def assemble_class_sessions(
         room_code = item.get("room", "").strip()
         formatia = item.get("formatia", "").strip() or item.get("base_group", "").strip()
 
-        start_dt, end_dt, _ = normalize_time(day, hours)
+        start_dt, end_dt, _ = normalize_time(
+            day, hours, reference_monday=reference_monday, academic_year=academic_year
+        )
 
         # Geocode room
         room_info = room_dict.get(room_code)
@@ -376,8 +449,11 @@ def assemble_class_sessions(
             continue
         seen.add(dedup_key)
 
+        session_key = f"{subj}:{start_dt.isoformat()}:{formatia}:{room_code}"
+        session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, session_key))
+
         session_dict = {
-            "id": str(uuid.uuid4()),
+            "id": session_id,
             "subject": subj,
             "start_time": start_dt,
             "end_time": end_dt,
@@ -397,13 +473,18 @@ def assemble_class_sessions(
     return sessions
 
 
-def seed_database(
+def refresh_schedule(
     db: Optional[Session] = None,
     student_schedule_url: str = DEFAULT_STUDENT_SCHEDULE_URL,
     classrooms_url: str = DEFAULT_CLASSROOMS_URL,
     optionals_url: str = DEFAULT_OPTIONALS_PAGE_URL,
+    academic_year: Optional[int] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Bulk-load scraped and normalized schedules and users into the database."""
+    """
+    Refreshes the schedule by scraping current schedules and classrooms,
+    upserting class sessions without destroying attendance records or users.
+    """
     Base.metadata.create_all(bind=engine)
     should_close = False
     if db is None:
@@ -412,7 +493,7 @@ def seed_database(
 
     try:
         # 1. Scrape rooms
-        rooms = scrape_classrooms(classrooms_url)
+        rooms = scrape_classrooms(classrooms_url, api_key=api_key)
 
         # 2. Scrape optional courses
         try:
@@ -442,14 +523,28 @@ def seed_database(
         raw_classes = scrape_student_schedule(student_schedule_url)
 
         # 4. Assemble sessions
-        sessions_data = assemble_class_sessions(raw_classes, rooms, optional_names)
+        sessions_data = assemble_class_sessions(
+            raw_classes, rooms, optional_names, academic_year=academic_year
+        )
 
-        # Clean existing records and bulk insert
-        db.query(AttendanceRecord).delete()
-        db.query(ClassSession).delete()
-        db.add_all([ClassSession(**s) for s in sessions_data])
+        # 5. Upsert class sessions without deleting attendance records
+        existing_by_id = {s.id: s for s in db.query(ClassSession).all()}
+        created_count = 0
+        updated_count = 0
 
-        # 5. Seed default test users if not present
+        for s_dict in sessions_data:
+            s_id = s_dict["id"]
+            existing_session = existing_by_id.get(s_id)
+            if existing_session:
+                for key, val in s_dict.items():
+                    if key != "id":
+                        setattr(existing_session, key, val)
+                updated_count += 1
+            else:
+                db.add(ClassSession(**s_dict))
+                created_count += 1
+
+        # 6. Seed default test users if not present
         existing_user = db.query(User).filter_by(role="student").first()
         if not existing_user:
             # Matches README John Doe student fixture
@@ -474,11 +569,17 @@ def seed_database(
 
         total_sessions = db.query(ClassSession).count()
         total_users = db.query(User).count()
+        attendance_count = db.query(AttendanceRecord).count()
+
         return {
             "status": "success",
             "sessions_seeded": total_sessions,
             "users_seeded": total_users,
             "rooms_mapped": len(rooms),
+            "sessions_created": created_count,
+            "sessions_updated": updated_count,
+            "total_sessions": total_sessions,
+            "attendance_records_preserved": attendance_count,
         }
     except Exception:
         db.rollback()
@@ -486,6 +587,25 @@ def seed_database(
     finally:
         if should_close:
             db.close()
+
+
+def seed_database(
+    db: Optional[Session] = None,
+    student_schedule_url: str = DEFAULT_STUDENT_SCHEDULE_URL,
+    classrooms_url: str = DEFAULT_CLASSROOMS_URL,
+    optionals_url: str = DEFAULT_OPTIONALS_PAGE_URL,
+    academic_year: Optional[int] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Bulk-load scraped and normalized schedules and users into the database without destroying attendance data."""
+    return refresh_schedule(
+        db=db,
+        student_schedule_url=student_schedule_url,
+        classrooms_url=classrooms_url,
+        optionals_url=optionals_url,
+        academic_year=academic_year,
+        api_key=api_key,
+    )
 
 
 if __name__ == "__main__":
