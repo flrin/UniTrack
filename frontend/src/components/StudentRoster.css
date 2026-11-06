@@ -1,0 +1,57 @@
+.roster {
+  background: white;
+  border: 1px solid #f1f5f9;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.roster table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  color: #1e293b;
+}
+
+.roster th {
+  color: #64748b;
+  padding: 8px;
+}
+
+.roster td {
+  padding: 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.present {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.pending {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.left {
+  color: #be123c;
+  background: #fff1f2;
+}
+
+.roster button {
+  background: #0ea5e9;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.roster button:hover {
+  background: #0284c7;
+}
