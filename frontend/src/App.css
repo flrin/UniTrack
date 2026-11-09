@@ -238,6 +238,40 @@ input[type='radio'] {
   margin: 4px 0 0;
 }
 
+.map-card {
+  margin-top: 24px;
+}
+
+.map-view {
+  border-radius: 12px;
+  height: 360px;
+  overflow: hidden;
+}
+
+.map-view .leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+.user-location-marker {
+  align-items: center;
+  background: #2563eb;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgb(15 23 42 / 35%);
+  display: flex;
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.user-location-marker span {
+  background: #fff;
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+
 @media (max-width: 600px) {
   .config-page,
   .dashboard-page {
