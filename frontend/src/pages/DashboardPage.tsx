@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import MapView from '../components/MapView'
 import { getStudentSchedule } from '../services/studentService'
 import type { ScheduleItem, StudentConfig } from '../types/student'
 
@@ -46,6 +47,16 @@ export default function DashboardPage({
             <p>{config.optionals.join(', ')}</p>
           </div>
         )}
+      </section>
+      <section className="dashboard-card map-card">
+        <h2>Class building</h2>
+        <p className="intro">Your location compared with the building for your next class.</p>
+        <MapView
+          targetLat={45.7489}
+          targetLng={21.2087}
+          userLat={45.7495}
+          userLng={21.211}
+        />
       </section>
     </main>
   )
