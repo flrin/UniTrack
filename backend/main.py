@@ -17,9 +17,7 @@ from models import (
 )
 from scraper import refresh_schedule, seed_database
 
-# NOTE: Local haversine stub — swap this import for Developer 1's module when merged.
-# Required signature: haversine_distance(lat1, lon1, lat2, lon2) -> float (metres)
-from utils import haversine_distance
+from utils import calculate_distance
 
 Base.metadata.create_all(bind=engine)
 
@@ -184,8 +182,7 @@ def student_checkin(
     if session is None:
         raise HTTPException(status_code=404, detail=f"ClassSession '{payload.class_id}' not found")
 
-    # NOTE: swap haversine_distance for Developer 1's implementation when merged.
-    distance_m = haversine_distance(
+    distance_m = calculate_distance(
         payload.user_lat, payload.user_lng,
         session.target_lat, session.target_lng,
     )
