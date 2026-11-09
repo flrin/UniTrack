@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,14 @@ from utils import calculate_distance
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="UniTrack API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +77,11 @@ def fmt_time(dt: datetime) -> str:
 @app.get("/")
 def read_root():
     return {"message": "Hello from FastAPI"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
