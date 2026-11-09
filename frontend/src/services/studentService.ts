@@ -1,3 +1,4 @@
+import { createMockSchedule } from '../mocks/schedule'
 import type { ScheduleItem, StudentConfig } from '../types/student'
 
 const CONFIG_STORAGE_KEY = 'unitrack.student.config'
@@ -20,8 +21,13 @@ export function saveStudentConfig(
   })
 }
 
+// TODO: replace with `GET /api/student/schedule` once the backend is wired up.
 export function getStudentSchedule(): Promise<ScheduleItem[]> {
-  return Promise.resolve([])
+  return Promise.resolve(createMockSchedule())
+}
+
+export function clearStudentConfig(): void {
+  window.localStorage.removeItem(CONFIG_STORAGE_KEY)
 }
 
 export function getSavedStudentConfig(): StudentConfig | null {
