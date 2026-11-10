@@ -8,14 +8,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
-from models import (
-    AttendanceRecord,
-    CheckInPayload,
-    ClassSession,
-    StudentConfigPayload,
-    StudentScheduleItem,
-    User,
-)
+from models import AttendanceRecord, ClassSession, User
+from schemas import CheckInPayload, StudentConfigPayload, StudentScheduleItem
 from scraper import refresh_schedule, seed_database
 
 from utils import calculate_distance
