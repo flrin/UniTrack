@@ -20,6 +20,18 @@ const ATTENDANCE_CLASS: Record<AttendanceLabel, string> = {
   'Left Early': 'status-missed',
 }
 
+const CLASS_TYPE_LABELS: Record<string, string> = {
+  curs: 'Lecture',
+  laborator: 'Lab',
+  seminar: 'Seminar',
+}
+
+function formatClassTypeLabel(rawType: string | null | undefined): string | null {
+  const trimmed = rawType?.trim()
+  if (!trimmed) return null
+  return CLASS_TYPE_LABELS[trimmed.toLowerCase()] ?? trimmed
+}
+
 // A class that ended without the backend ever recording attendance was missed.
 function getAttendanceLabel(phase: ClassPhase, status: AttendanceStatus): AttendanceLabel {
   return phase === 'Ended' && status === 'Pending' ? 'Missed' : status
@@ -44,13 +56,23 @@ export default function ScheduleList({ items }: { items: readonly ScheduleItem[]
       {todaysClasses.map((item) => {
         const phase = getClassPhase(item, now)
         const attendance = getAttendanceLabel(phase, item.status)
+        const room = item.room?.trim()
+        const classTypeLabel = formatClassTypeLabel(item.class_type)
 
         return (
           <li className={`schedule-item ${PHASE_CLASS[phase]}`} key={item.class_id}>
             <div className="schedule-time">{item.time}</div>
             <div className="schedule-details">
-              <div className="schedule-subject">{item.subject}</div>
-              <div className="schedule-building">{item.building_name}</div>
+              <div className="schedule-subject-row">
+                <div className="schedule-subject">{item.subject}</div>
+                {classTypeLabel && (
+                  <span className="class-type-tag">{classTypeLabel}</span>
+                )}
+              </div>
+              <div className="schedule-building">
+                {room && <span className="schedule-room">Room {room} · </span>}
+                {item.building_name}
+              </div>
             </div>
             <div className="schedule-statuses">
               <span className={`status-badge ${PHASE_CLASS[phase]}`}>

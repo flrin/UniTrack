@@ -63,3 +63,38 @@ export function getTodaysClasses<T extends ClassWindow>(
     )
   })
 }
+
+/**
+ * Picks the single class most relevant to display on the map at `now`:
+ * 1. The earliest currently active class.
+ * 2. Otherwise the next upcoming class today.
+ * 3. Otherwise the next upcoming class in the full schedule.
+ * 4. Otherwise the most recently ended class today, or the first valid class.
+ */
+export function getRelevantClass<T extends ClassWindow>(
+  classes: readonly T[],
+  now: number = Date.now(),
+): T | null {
+  const valid = classes
+    .filter((item) => {
+      const start = Date.parse(item.start_time)
+      const end = Date.parse(item.end_time)
+      return !Number.isNaN(start) && !Number.isNaN(end) && end > start
+    })
+    .sort((a, b) => Date.parse(a.start_time) - Date.parse(b.start_time))
+
+  if (valid.length === 0) return null
+
+  const active = valid.find((item) => isClassActive(item, now))
+  if (active) return active
+
+  const todays = getTodaysClasses(valid, now)
+  const nextToday = todays.find((item) => Date.parse(item.start_time) >= now)
+  if (nextToday) return nextToday
+
+  const nextOverall = valid.find((item) => Date.parse(item.start_time) >= now)
+  if (nextOverall) return nextOverall
+
+  if (todays.length > 0) return todays[todays.length - 1]
+  return valid[0]
+}

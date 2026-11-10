@@ -10,6 +10,8 @@ export type ScheduleItem = {
   subject: string
   time: string
   building_name: string
+  room?: string | null
+  class_type?: string | null
   target_lat: number
   target_lng: number
   /**

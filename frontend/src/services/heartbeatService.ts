@@ -14,6 +14,8 @@ export type TrackableClass = ClassWindow & { class_id: string }
 export type HeartbeatManagerOptions = {
   /** Called after each successful check-in with the backend's response. */
   onCheckIn?: (classId: string, response: CheckInResponse) => void
+  /** Called whenever a GPS fix succeeds during a tracked heartbeat. */
+  onLocation?: (position: GeoPoint) => void
   /** Called when reading the GPS or sending the check-in fails. */
   onError?: (classId: string, error: Error) => void
   /** Called whenever the set of classes being tracked changes. */
@@ -56,6 +58,7 @@ export function createHeartbeatManager(
 ): HeartbeatManager {
   const {
     onCheckIn,
+    onLocation,
     onError,
     onTrackingChange,
     getPosition = getCurrentPosition,
@@ -98,6 +101,7 @@ export function createHeartbeatManager(
       const position = await getPosition()
       // The class may have ended while waiting for the GPS fix.
       if (!isStillTracked()) return
+      onLocation?.(position)
 
       const response = await send({
         class_id: classId,

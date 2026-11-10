@@ -8,15 +8,22 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from database import Base, SessionLocal, engine
 from models import AttendanceRecord, ClassSession, User
-
-DEFAULT_CLASSROOMS_URL = "https://www.cs.ubbcluj.ro/files/orar/2026-1/sali/legenda.html"
-DEFAULT_STUDENT_SCHEDULE_URL = "https://www.cs.ubbcluj.ro/files/orar/2026-1/tabelar/IE3.html"
-DEFAULT_TEACHER_SCHEDULE_URL = "https://www.cs.ubbcluj.ro/files/orar/2026-1/cadre/mogr1.html"
-DEFAULT_OPTIONALS_PAGE_URL = "https://www.cs.ubbcluj.ro/lista-cursurilor-optionale-alese-pentru-anul-universitar-2026-2027/"
+from utils import (
+    SPEC_MAP,
+    build_classrooms_url,
+    build_optionals_page_url,
+    build_student_schedule_url,
+    build_teacher_schedule_url,
+    get_campus_timezone,
+    parse_group_components,
+    resolve_academic_year,
+    resolve_semester,
+)
 
 # Day mapping for Romanian schedule days (0 = Monday, ..., 4 = Friday)
 RO_DAY_MAP = {
@@ -43,10 +50,26 @@ SPECIALIZATION_CODE_MAP = {
     "7": "Informatica Maghiara",
     "8": "Matematica Informatica Engleza",
     "9": "Informatica Engleza",
+    "10": "Inteligenta Artificiala",
+    "13": "Ingineria Informatiei",
+    "14": "Ingineria Informatiei Maghiara",
+    "15": "Matematica Informatica Data Science",
+    "16": "Matematica Informatica Data Science Maghiara",
 }
 
 
 _GEOCODE_CACHE: Dict[str, Tuple[float, float, str]] = {}
+_ROOMS_CACHE: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_OPTIONALS_CACHE: Dict[str, Set[str]] = {}
+_FALLBACK_OPTIONAL_NAMES: Set[str] = {
+    "cloud computing",
+    "machine learning",
+    "arhitectura aplicatiilor cloud",
+    "devops: automatizari in cloud",
+    "calcul afectiv",
+    "realitate virtuala",
+    "roboti inteligenti",
+}
 
 
 def get_building_coords(
@@ -150,10 +173,14 @@ def fetch_page_content(url: str, default_encoding: str = "utf-8") -> str:
 # Issue #21: Parse Classrooms & Geocode
 # ---------------------------------------------------------------------------
 def scrape_classrooms(
-    url: str = DEFAULT_CLASSROOMS_URL, api_key: Optional[str] = None
+    url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Parse Legenda salilor table into a dictionary of room code -> coordinates & building name."""
-    html = fetch_page_content(url)
+    target_url = url or build_classrooms_url(academic_year=academic_year, semester=semester)
+    html = fetch_page_content(target_url)
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table")
     if not table:
@@ -178,13 +205,21 @@ def scrape_classrooms(
 # ---------------------------------------------------------------------------
 # Issue #22: Parse Teacher and Student HTML Schedules
 # ---------------------------------------------------------------------------
-def scrape_student_schedule(url: str = DEFAULT_STUDENT_SCHEDULE_URL) -> List[Dict[str, Any]]:
+def scrape_student_schedule(
+    url: Optional[str] = None,
+    year_code: str = "IE3",
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """
     Parse student schedule HTML pages.
     Associates <h1>Grupa XXX</h1> headers with subsequent tables and extracts Formatia,
     identifying subgroup classes (e.g. 933/1 vs 933/2, base group 933, or IE3).
     """
-    html = fetch_page_content(url)
+    target_url = url or build_student_schedule_url(
+        year_code, academic_year=academic_year, semester=semester
+    )
+    html = fetch_page_content(target_url)
     soup = BeautifulSoup(html, "html.parser")
 
     classes: List[Dict[str, Any]] = []
@@ -235,9 +270,17 @@ def scrape_student_schedule(url: str = DEFAULT_STUDENT_SCHEDULE_URL) -> List[Dic
     return classes
 
 
-def scrape_teacher_schedule(url: str = DEFAULT_TEACHER_SCHEDULE_URL) -> List[Dict[str, Any]]:
+def scrape_teacher_schedule(
+    url: Optional[str] = None,
+    teacher_code: str = "mogr1",
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """Parse teacher schedule HTML page. Extracts Ziua, Orele, Frecventa, Sala, Anul, Formatia, Tipul, Disciplina."""
-    html = fetch_page_content(url)
+    target_url = url or build_teacher_schedule_url(
+        teacher_code=teacher_code, academic_year=academic_year, semester=semester
+    )
+    html = fetch_page_content(target_url)
     soup = BeautifulSoup(html, "html.parser")
 
     h1 = soup.find("h1")
@@ -274,13 +317,15 @@ def scrape_teacher_schedule(url: str = DEFAULT_TEACHER_SCHEDULE_URL) -> List[Dic
 # Issue #23: Scrape and Parse Optional Course PDFs
 # ---------------------------------------------------------------------------
 def scrape_optional_courses(
-    page_url: str = DEFAULT_OPTIONALS_PAGE_URL,
+    page_url: Optional[str] = None,
+    academic_year: Optional[int] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Scrapes the optional courses page, downloads linked PDFs into memory,
     extracts elective subjects, and maps them to specialization digits (e.g. '9' for Informatica Engleza).
     """
-    html = fetch_page_content(page_url)
+    target_url = page_url or build_optionals_page_url(academic_year=academic_year)
+    html = fetch_page_content(target_url)
     soup = BeautifulSoup(html, "html.parser")
 
     pdf_links: List[Tuple[str, str]] = []
@@ -349,7 +394,29 @@ def scrape_optional_courses(
 # ---------------------------------------------------------------------------
 # Issue #24: Data Normalization & Database Seeding
 # ---------------------------------------------------------------------------
-DEFAULT_ACADEMIC_YEAR = int(os.getenv("ACADEMIC_YEAR", "2026"))
+DEFAULT_SEMESTER_WEEKS = int(os.getenv("SEMESTER_WEEKS", "14"))
+
+
+def get_semester_weeks(weeks: Optional[int] = None) -> int:
+    """Return configured number of teaching weeks in the semester (minimum 1)."""
+    count = (
+        weeks
+        if weeks is not None
+        else int(os.getenv("SEMESTER_WEEKS", str(DEFAULT_SEMESTER_WEEKS)))
+    )
+    return max(1, count)
+
+
+def should_schedule_in_week(frequency: Optional[str], teaching_week: int) -> bool:
+    """Evaluate UBB frequency ('sapt. 1', 'sapt. 2', or '') against 1-based teaching week."""
+    freq = (frequency or "").strip().lower()
+    if not freq:
+        return True
+    if re.search(r"\b1\b", freq) or "impar" in freq:
+        return teaching_week % 2 == 1
+    if re.search(r"\b2\b", freq) or re.search(r"\bpar\b", freq):
+        return teaching_week % 2 == 0
+    return True
 
 
 def get_first_semester_monday(academic_year: Optional[int] = None) -> date:
@@ -357,11 +424,7 @@ def get_first_semester_monday(academic_year: Optional[int] = None) -> date:
     Returns the Monday of the first semester week.
     The first semester week is defined as the Monday-Sunday week containing October 1.
     """
-    year = (
-        academic_year
-        if academic_year is not None
-        else int(os.getenv("ACADEMIC_YEAR", str(DEFAULT_ACADEMIC_YEAR)))
-    )
+    year = resolve_academic_year(academic_year)
     oct1 = date(year, 10, 1)
     return oct1 - timedelta(days=oct1.weekday())
 
@@ -373,10 +436,10 @@ def normalize_time(
     academic_year: Optional[int] = None,
 ) -> Tuple[datetime, datetime, str]:
     """
-    Normalizes 'Ziua' (e.g. 'Luni') and 'Orele' (e.g. '10-12') into standardized
-    UTC datetime timestamps and display string (e.g. '10:00 AM - 12:00 PM').
-    Dates are relative to the first semester week (Monday-Sunday containing October 1)
-    for the configured academic year.
+    Normalizes 'Ziua' (e.g. 'Luni') and 'Orele' (e.g. '10-12') in campus local time
+    into standardized UTC datetime timestamps and a local display string
+    (e.g. '10:00 AM - 12:00 PM').
+    Dates are relative to `reference_monday` (default: first semester week Monday).
     """
     if reference_monday is None:
         reference_monday = get_first_semester_monday(academic_year)
@@ -393,12 +456,16 @@ def normalize_time(
     else:
         start_hour, end_hour = 8, 10
 
-    start_dt = datetime(target_date.year, target_date.month, target_date.day, start_hour, 0, tzinfo=timezone.utc)
-    end_dt = datetime(target_date.year, target_date.month, target_date.day, end_hour, 0, tzinfo=timezone.utc)
+    campus_tz = get_campus_timezone()
+    start_local = datetime(target_date.year, target_date.month, target_date.day, start_hour, 0, tzinfo=campus_tz)
+    end_local = datetime(target_date.year, target_date.month, target_date.day, end_hour, 0, tzinfo=campus_tz)
 
-    # 12-hour formatted time display string (e.g. "10:00 AM - 12:00 PM")
-    start_fmt = start_dt.strftime("%I:%M %p").lstrip("0")
-    end_fmt = end_dt.strftime("%I:%M %p").lstrip("0")
+    start_dt = start_local.astimezone(timezone.utc)
+    end_dt = end_local.astimezone(timezone.utc)
+
+    # 12-hour formatted time display string in campus local time (e.g. "10:00 AM - 12:00 PM")
+    start_fmt = start_local.strftime("%I:%M %p").lstrip("0")
+    end_fmt = end_local.strftime("%I:%M %p").lstrip("0")
     display_time = f"{start_fmt} - {end_fmt}"
 
     return start_dt, end_dt, display_time
@@ -410,8 +477,18 @@ def assemble_class_sessions(
     optional_subjects_set: Set[str],
     reference_monday: Optional[date] = None,
     academic_year: Optional[int] = None,
+    weeks: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Merge schedule entries with room coordinates and optional subject flags."""
+    """Expand timetable entries across semester weeks with room coords and optional flags."""
+    if reference_monday is None:
+        reference_monday = get_first_semester_monday(academic_year)
+
+    total_weeks = get_semester_weeks(weeks)
+    teaching_weeks = [
+        (week, reference_monday + timedelta(weeks=week - 1))
+        for week in range(1, total_weeks + 1)
+    ]
+
     sessions = []
     seen = set()
 
@@ -419,14 +496,11 @@ def assemble_class_sessions(
         subj = item["subject"].strip()
         day = item["day"]
         hours = item["hours"]
+        frequency = item.get("frequency")
         room_code = item.get("room", "").strip()
         formatia = item.get("formatia", "").strip() or item.get("base_group", "").strip()
 
-        start_dt, end_dt, _ = normalize_time(
-            day, hours, reference_monday=reference_monday, academic_year=academic_year
-        )
-
-        # Geocode room
+        # Geocode room once per timetable entry
         room_info = room_dict.get(room_code)
         if room_info:
             bld_name = room_info["building_name"]
@@ -443,62 +517,69 @@ def assemble_class_sessions(
                 is_opt = True
                 break
 
-        # Deduplicate identical sessions (e.g. lectures occurring for multiple subgroups in same room)
-        dedup_key = (subj, start_dt.isoformat(), room_code, formatia)
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
+        for teaching_week, week_monday in teaching_weeks:
+            if not should_schedule_in_week(frequency, teaching_week):
+                continue
 
-        session_key = f"{subj}:{start_dt.isoformat()}:{formatia}:{room_code}"
-        session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, session_key))
+            start_dt, end_dt, _ = normalize_time(
+                day, hours, reference_monday=week_monday, academic_year=academic_year
+            )
 
-        session_dict = {
-            "id": session_id,
-            "subject": subj,
-            "start_time": start_dt,
-            "end_time": end_dt,
-            "building_name": bld_name,
-            "target_lat": lat,
-            "target_lng": lng,
-            "radius_meters": 100.0,
-            "required_group": formatia,
-            "is_optional": is_opt,
-            "room": room_code,
-            "teacher_name": item.get("teacher"),
-            "frequency": item.get("frequency"),
-            "class_type": item.get("class_type"),
-        }
-        sessions.append(session_dict)
+            # Deduplicate identical occurrences (e.g. lectures for multiple subgroups in same room)
+            dedup_key = (subj, start_dt.isoformat(), room_code, formatia)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            session_key = f"{subj}:{start_dt.isoformat()}:{formatia}:{room_code}"
+            session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, session_key))
+
+            sessions.append(
+                {
+                    "id": session_id,
+                    "subject": subj,
+                    "start_time": start_dt,
+                    "end_time": end_dt,
+                    "building_name": bld_name,
+                    "target_lat": lat,
+                    "target_lng": lng,
+                    "radius_meters": 100.0,
+                    "required_group": formatia,
+                    "is_optional": is_opt,
+                    "room": room_code,
+                    "teacher_name": item.get("teacher"),
+                    "frequency": frequency,
+                    "class_type": item.get("class_type"),
+                }
+            )
 
     return sessions
 
 
-def refresh_schedule(
-    db: Optional[Session] = None,
-    student_schedule_url: str = DEFAULT_STUDENT_SCHEDULE_URL,
-    classrooms_url: str = DEFAULT_CLASSROOMS_URL,
-    optionals_url: str = DEFAULT_OPTIONALS_PAGE_URL,
-    academic_year: Optional[int] = None,
+def _get_rooms_and_optionals(
+    classrooms_url: Optional[str] = None,
+    optionals_url: Optional[str] = None,
     api_key: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Refreshes the schedule by scraping current schedules and classrooms,
-    upserting class sessions without destroying attendance records or users.
-    """
-    Base.metadata.create_all(bind=engine)
-    should_close = False
-    if db is None:
-        db = SessionLocal()
-        should_close = True
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+    force_refresh: bool = False,
+) -> Tuple[Dict[str, Dict[str, Any]], Set[str]]:
+    resolved_classrooms_url = classrooms_url or build_classrooms_url(
+        academic_year=academic_year, semester=semester
+    )
+    resolved_optionals_url = optionals_url or build_optionals_page_url(
+        academic_year=academic_year
+    )
 
-    try:
-        # 1. Scrape rooms
-        rooms = scrape_classrooms(classrooms_url, api_key=api_key)
+    if force_refresh or resolved_classrooms_url not in _ROOMS_CACHE:
+        _ROOMS_CACHE[resolved_classrooms_url] = scrape_classrooms(
+            resolved_classrooms_url, api_key=api_key
+        )
 
-        # 2. Scrape optional courses
+    if force_refresh or resolved_optionals_url not in _OPTIONALS_CACHE:
         try:
-            electives = scrape_optional_courses(optionals_url)
-            optional_names = {
+            electives = scrape_optional_courses(resolved_optionals_url)
+            _OPTIONALS_CACHE[resolved_optionals_url] = {
                 item["name_ro"].lower()
                 for items in electives.values()
                 for item in items
@@ -508,41 +589,259 @@ def refresh_schedule(
                 for item in items
             }
         except Exception:
-            # Fallback if university PDF server is slow/unreachable
-            optional_names = {
-                "cloud computing",
-                "machine learning",
-                "arhitectura aplicatiilor cloud",
-                "devops: automatizari in cloud",
-                "calcul afectiv",
-                "realitate virtuala",
-                "roboti inteligenti",
-            }
+            _OPTIONALS_CACHE[resolved_optionals_url] = set(_FALLBACK_OPTIONAL_NAMES)
 
-        # 3. Scrape student schedule
-        raw_classes = scrape_student_schedule(student_schedule_url)
+    return _ROOMS_CACHE[resolved_classrooms_url], _OPTIONALS_CACHE[resolved_optionals_url]
 
-        # 4. Assemble sessions
-        sessions_data = assemble_class_sessions(
-            raw_classes, rooms, optional_names, academic_year=academic_year
+
+def _upsert_sessions(
+    db: Session,
+    sessions_data: List[Dict[str, Any]],
+    prune_stale: bool = False,
+) -> Tuple[int, int, int]:
+    """Upsert sessions by deterministic ID, optionally pruning unreferenced stale sessions."""
+    if prune_stale:
+        existing_by_id = {s.id: s for s in db.query(ClassSession).all()}
+    else:
+        ids = [s["id"] for s in sessions_data]
+        existing_by_id = (
+            {s.id: s for s in db.query(ClassSession).filter(ClassSession.id.in_(ids)).all()}
+            if ids
+            else {}
         )
 
-        # 5. Upsert class sessions without deleting attendance records
-        existing_by_id = {s.id: s for s in db.query(ClassSession).all()}
-        created_count = 0
-        updated_count = 0
+    new_ids = {s["id"] for s in sessions_data}
+    created_count = 0
+    updated_count = 0
+    deleted_count = 0
 
-        for s_dict in sessions_data:
-            s_id = s_dict["id"]
-            existing_session = existing_by_id.get(s_id)
-            if existing_session:
-                for key, val in s_dict.items():
-                    if key != "id":
-                        setattr(existing_session, key, val)
-                updated_count += 1
-            else:
-                db.add(ClassSession(**s_dict))
-                created_count += 1
+    for s_dict in sessions_data:
+        s_id = s_dict["id"]
+        existing_session = existing_by_id.get(s_id)
+        if existing_session:
+            for key, val in s_dict.items():
+                if key != "id":
+                    setattr(existing_session, key, val)
+            updated_count += 1
+        else:
+            db.add(ClassSession(**s_dict))
+            created_count += 1
+
+    if prune_stale:
+        referenced_ids = {
+            row[0] for row in db.query(AttendanceRecord.class_session_id).distinct().all()
+        }
+        for old_id, old_session in existing_by_id.items():
+            if old_id not in new_ids and old_id not in referenced_ids:
+                db.delete(old_session)
+                deleted_count += 1
+
+    return created_count, updated_count, deleted_count
+
+
+def _resolve_year_code_and_prefix(group_or_year_code: str) -> Tuple[Optional[str], Optional[str]]:
+    cleaned = group_or_year_code.strip()
+    if not cleaned:
+        return None, None
+
+    if cleaned[0].isdigit():
+        parsed = parse_group_components(cleaned)
+        year_digit = str(parsed["year_digit"])
+        if not parsed["is_known_spec"] or year_digit not in {"1", "2", "3", "4"}:
+            return None, None
+        return str(parsed["year_code"]), f"{parsed['spec_code']}{year_digit}"
+
+    known_prefixes = set(SPEC_MAP.values())
+    match = re.match(r"^([A-Za-z]+)([1-4])$", cleaned)
+    if match and match.group(1) in known_prefixes:
+        return cleaned, None
+    return None, None
+
+
+def ensure_year_code_loaded(
+    db: Session,
+    group_or_year_code: str,
+    classrooms_url: Optional[str] = None,
+    optionals_url: Optional[str] = None,
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+    api_key: Optional[str] = None,
+    weeks: Optional[int] = None,
+) -> bool:
+    """
+    Scrape and upsert timetable sessions for `group_or_year_code` on demand
+    (e.g., '1631/1' -> '.../{year}-{semester}/tabelar/MIMDS3.html') if not already present in `db`.
+    """
+    year_code, base_prefix = _resolve_year_code_and_prefix(group_or_year_code)
+    if not year_code:
+        return False
+
+    has_url_override = bool(
+        os.getenv("STUDENT_SCHEDULE_BASE_URL", "").strip()
+        or os.getenv("UBB_ORAR_BASE_URL", "").strip()
+    )
+    if not has_url_override and resolve_semester(semester) is None:
+        return False
+
+    filters = [ClassSession.required_group == year_code]
+    if base_prefix:
+        filters.extend(
+            [
+                ClassSession.required_group.like(f"{base_prefix}_"),
+                ClassSession.required_group.like(f"{base_prefix}_/%"),
+            ]
+        )
+    if db.query(ClassSession.id).filter(or_(*filters)).first() is not None:
+        return False
+
+    url = build_student_schedule_url(
+        year_code, academic_year=academic_year, semester=semester
+    )
+    try:
+        raw_classes = scrape_student_schedule(url)
+    except httpx.HTTPError:
+        return False
+
+    if not raw_classes:
+        return False
+
+    rooms, optional_names = _get_rooms_and_optionals(
+        classrooms_url=classrooms_url,
+        optionals_url=optionals_url,
+        api_key=api_key,
+        academic_year=academic_year,
+        semester=semester,
+        force_refresh=False,
+    )
+    sessions_data = assemble_class_sessions(
+        raw_classes,
+        rooms,
+        optional_names,
+        academic_year=academic_year,
+        weeks=weeks,
+    )
+    if not sessions_data:
+        return False
+
+    _upsert_sessions(db, sessions_data, prune_stale=False)
+    db.commit()
+    return True
+
+
+def _collect_schedule_urls(
+    db: Session,
+    student_schedule_url: Optional[str] = None,
+    year_codes: Optional[List[str]] = None,
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+) -> List[str]:
+    if student_schedule_url is not None:
+        return [student_schedule_url]
+
+    codes: Set[str] = set()
+    if year_codes:
+        codes.update(year_codes)
+    else:
+        for (group,) in db.query(User.group).filter(User.role == "student").all():
+            if group:
+                yc, _ = _resolve_year_code_and_prefix(group)
+                if yc:
+                    codes.add(yc)
+        known_prefixes = set(SPEC_MAP.values())
+        for (req_group,) in db.query(ClassSession.required_group).distinct().all():
+            if req_group:
+                m = re.match(r"^([A-Za-z]+)([1-4])$", req_group)
+                if m and m.group(1) in known_prefixes:
+                    codes.add(req_group)
+        if not codes:
+            codes.add("IE3")
+
+    return [
+        build_student_schedule_url(yc, academic_year=academic_year, semester=semester)
+        for yc in sorted(codes)
+    ]
+
+
+def refresh_schedule(
+    db: Optional[Session] = None,
+    student_schedule_url: Optional[str] = None,
+    classrooms_url: Optional[str] = None,
+    optionals_url: Optional[str] = None,
+    academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
+    api_key: Optional[str] = None,
+    weeks: Optional[int] = None,
+    year_codes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Refreshes the schedule by scraping current schedules and classrooms,
+    upserting class sessions across semester weeks without destroying attendance records or users.
+    """
+    Base.metadata.create_all(bind=engine)
+    should_close = False
+    if db is None:
+        db = SessionLocal()
+        should_close = True
+
+    try:
+        has_url_override = bool(
+            student_schedule_url
+            or os.getenv("STUDENT_SCHEDULE_BASE_URL", "").strip()
+            or os.getenv("UBB_ORAR_BASE_URL", "").strip()
+        )
+        if not has_url_override and resolve_semester(semester) is None:
+            return {
+                "status": "skipped",
+                "reason": "non-academic period (Jul-Sep)",
+                "sessions_seeded": db.query(ClassSession).count(),
+                "users_seeded": db.query(User).count(),
+                "rooms_mapped": 0,
+                "sessions_created": 0,
+                "sessions_updated": 0,
+                "sessions_deleted": 0,
+                "total_sessions": db.query(ClassSession).count(),
+                "attendance_records_preserved": db.query(AttendanceRecord).count(),
+            }
+
+        # 1 & 2. Scrape and cache rooms and optional courses
+        rooms, optional_names = _get_rooms_and_optionals(
+            classrooms_url=classrooms_url,
+            optionals_url=optionals_url,
+            api_key=api_key,
+            academic_year=academic_year,
+            semester=semester,
+            force_refresh=True,
+        )
+
+        # 3. Scrape student schedule(s) dynamically by year code
+        urls = _collect_schedule_urls(
+            db,
+            student_schedule_url=student_schedule_url,
+            year_codes=year_codes,
+            academic_year=academic_year,
+            semester=semester,
+        )
+        raw_classes: List[Dict[str, Any]] = []
+        for url in urls:
+            try:
+                raw_classes.extend(scrape_student_schedule(url))
+            except httpx.HTTPError:
+                if student_schedule_url is not None or len(urls) == 1:
+                    raise
+
+        # 4. Assemble sessions across the configured semester weeks
+        sessions_data = assemble_class_sessions(
+            raw_classes,
+            rooms,
+            optional_names,
+            academic_year=academic_year,
+            weeks=weeks,
+        )
+
+        # 5. Upsert class sessions and prune obsolete unreferenced sessions without touching attendance
+        created_count, updated_count, deleted_count = _upsert_sessions(
+            db, sessions_data, prune_stale=True
+        )
 
         # 6. Seed default test users if not present
         existing_user = db.query(User).filter_by(role="student").first()
@@ -578,6 +877,7 @@ def refresh_schedule(
             "rooms_mapped": len(rooms),
             "sessions_created": created_count,
             "sessions_updated": updated_count,
+            "sessions_deleted": deleted_count,
             "total_sessions": total_sessions,
             "attendance_records_preserved": attendance_count,
         }
@@ -591,11 +891,14 @@ def refresh_schedule(
 
 def seed_database(
     db: Optional[Session] = None,
-    student_schedule_url: str = DEFAULT_STUDENT_SCHEDULE_URL,
-    classrooms_url: str = DEFAULT_CLASSROOMS_URL,
-    optionals_url: str = DEFAULT_OPTIONALS_PAGE_URL,
+    student_schedule_url: Optional[str] = None,
+    classrooms_url: Optional[str] = None,
+    optionals_url: Optional[str] = None,
     academic_year: Optional[int] = None,
+    semester: Optional[int] = None,
     api_key: Optional[str] = None,
+    weeks: Optional[int] = None,
+    year_codes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Bulk-load scraped and normalized schedules and users into the database without destroying attendance data."""
     return refresh_schedule(
@@ -604,7 +907,10 @@ def seed_database(
         classrooms_url=classrooms_url,
         optionals_url=optionals_url,
         academic_year=academic_year,
+        semester=semester,
         api_key=api_key,
+        weeks=weeks,
+        year_codes=year_codes,
     )
 
 

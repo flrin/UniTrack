@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StudentConfigPayload(BaseModel):
-    group: str
+    group: str = Field(..., pattern=r"^\d{3,4}/\d+$")
     optionals: List[str] = []
 
 
@@ -20,8 +20,12 @@ class StudentScheduleItem(BaseModel):
     subject: str
     time: str
     building_name: str
+    room: Optional[str] = None
+    class_type: Optional[str] = None
     target_lat: float
     target_lng: float
+    start_time: datetime
+    end_time: datetime
     status: str = "Pending"
 
 
