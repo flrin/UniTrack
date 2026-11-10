@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { GeoPoint } from '../services/geolocationService'
 import { createHeartbeatManager } from '../services/heartbeatService'
 import type { HeartbeatManager } from '../services/heartbeatService'
 import type { AttendanceStatus } from '../types/roster'
@@ -7,16 +8,19 @@ import type { ScheduleItem } from '../types/student'
 /**
  * Runs the automatic GPS heartbeat for the given classes: it starts by itself
  * when a class begins and stops when it ends. Returns the latest attendance
- * status the backend reported per class and the most recent heartbeat error
- * (cleared by the next successful check-in or when no class is being tracked).
+ * status the backend reported per class, the latest successful GPS fix, and
+ * the most recent heartbeat error (cleared by the next successful check-in or
+ * when no class is being tracked).
  */
 export function useAttendanceHeartbeat(classes: readonly ScheduleItem[]) {
   const [statuses, setStatuses] = useState<Record<string, AttendanceStatus>>({})
+  const [location, setLocation] = useState<GeoPoint | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const managerRef = useRef<HeartbeatManager | null>(null)
 
   useEffect(() => {
     const manager = createHeartbeatManager({
+      onLocation: (position) => setLocation(position),
       onCheckIn: (classId, response) => {
         setStatuses((current) => ({ ...current, [classId]: response.status }))
         setError(null)
@@ -40,5 +44,5 @@ export function useAttendanceHeartbeat(classes: readonly ScheduleItem[]) {
     managerRef.current?.setClasses(classes)
   }, [classes])
 
-  return { statuses, error }
+  return { statuses, location, error }
 }

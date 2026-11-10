@@ -34,15 +34,37 @@
   font-weight: 650;
 }
 
+.schedule-subject-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .schedule-subject {
   color: #1e293b;
   font-weight: 600;
+}
+
+.class-type-tag {
+  background: #e0f2fe;
+  border-radius: 999px;
+  color: #0369a1;
+  font-size: 0.75rem;
+  font-weight: 650;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
 
 .schedule-building {
   color: #64748b;
   font-size: 0.9rem;
   margin-top: 2px;
+}
+
+.schedule-room {
+  color: #0369a1;
+  font-weight: 600;
 }
 
 .schedule-statuses {

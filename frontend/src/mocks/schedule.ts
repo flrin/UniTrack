@@ -14,7 +14,10 @@ function mockClass(
   now: number,
   startOffsetMin: number,
   endOffsetMin: number,
-  fields: Pick<ScheduleItem, 'class_id' | 'subject' | 'building_name' | 'status'>,
+  fields: Pick<
+    ScheduleItem,
+    'class_id' | 'subject' | 'building_name' | 'room' | 'class_type' | 'status'
+  >,
 ): ScheduleItem {
   const start = now + startOffsetMin * MINUTE_MS
   const end = now + endOffsetMin * MINUTE_MS
@@ -41,18 +44,24 @@ export function createMockSchedule(now: number = Date.now()): ScheduleItem[] {
       class_id: 'mock-class-1',
       subject: 'Interactiunea om-calculator',
       building_name: 'Univ Dimitrie Cantemir, etaj 5',
+      room: 'DC508',
+      class_type: 'Laborator',
       status: 'Pending',
     }),
     mockClass(now, -5, 55, {
       class_id: 'mock-class-2',
       subject: 'Cloud Computing',
       building_name: 'Univ Dimitrie Cantemir, etaj 5',
+      room: 'DC507',
+      class_type: 'Curs',
       status: 'Pending',
     }),
     mockClass(now, 120, 240, {
       class_id: 'mock-class-3',
       subject: 'Machine Learning',
       building_name: 'FSEGA, etaj 2',
+      room: 'L402',
+      class_type: 'Seminar',
       status: 'Pending',
     }),
   ]

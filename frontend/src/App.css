@@ -81,6 +81,7 @@ input:not([type]) {
   border: 1px solid #cbd5e1;
 }
 
+.text-input,
 #base-group {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -90,6 +91,7 @@ input:not([type]) {
   width: 100%;
 }
 
+.text-input:focus,
 #base-group:focus {
   border-color: #0ea5e9;
   outline: 3px solid #e0f2fe;
@@ -196,6 +198,12 @@ input[type='radio'] {
   font-size: 0.9rem;
   margin: 8px 0 0;
   padding: 10px 12px;
+}
+
+.optionals-error {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
 }
 
 .dashboard-page {

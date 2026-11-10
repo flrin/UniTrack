@@ -125,7 +125,7 @@ class TestUniTrackScraper(unittest.TestCase):
     # Sub-issue 24: Data Normalization & Database Seeding
     # -----------------------------------------------------------------------
     def test_normalize_time(self):
-        # 2026: October 1 is Thursday; first semester week Monday is 2026-09-28
+        # 2026: October 1 is Thursday; first semester week Monday is 2026-09-28 (EEST, UTC+3)
         mon_first_week = get_first_semester_monday(2026)
         self.assertEqual(mon_first_week, date(2026, 9, 28))
 
@@ -133,17 +133,26 @@ class TestUniTrackScraper(unittest.TestCase):
         self.assertEqual(start_dt.year, 2026)
         self.assertEqual(start_dt.month, 9)
         self.assertEqual(start_dt.day, 28)
-        self.assertEqual(start_dt.hour, 10)
-        self.assertEqual(end_dt.hour, 12)
+        self.assertEqual(start_dt.hour, 7)
+        self.assertEqual(end_dt.hour, 9)
         self.assertEqual(display, "10:00 AM - 12:00 PM")
 
-        # Friday of the first semester week: 2026-10-02
+        # Post-DST (2026-11-09 week is EET, UTC+2): 10-12 campus local == 08:00-10:00 UTC
+        start_dst, end_dst, display_dst = normalize_time(
+            "Marti", "10-12", reference_monday=date(2026, 11, 9)
+        )
+        self.assertEqual(start_dst.day, 10)
+        self.assertEqual(start_dst.hour, 8)
+        self.assertEqual(end_dst.hour, 10)
+        self.assertEqual(display_dst, "10:00 AM - 12:00 PM")
+
+        # Friday of the first semester week: 2026-10-02 (EEST, UTC+3)
         start_fri, end_fri, _ = normalize_time("Vineri", "14-16", academic_year=2026)
         self.assertEqual(start_fri.year, 2026)
         self.assertEqual(start_fri.month, 10)
         self.assertEqual(start_fri.day, 2)
-        self.assertEqual(start_fri.hour, 14)
-        self.assertEqual(end_fri.hour, 16)
+        self.assertEqual(start_fri.hour, 11)
+        self.assertEqual(end_fri.hour, 13)
 
         # Configurable academic year (2025: Oct 1 is Wednesday -> Monday is 2025-09-29)
         start_2025, _, _ = normalize_time("Luni", "8-10", academic_year=2025)
@@ -181,7 +190,9 @@ class TestUniTrackScraper(unittest.TestCase):
                 "target_lng": 23.7841,
             }
         }
-        sessions = assemble_class_sessions(raw, rooms, optional_subjects_set=set(), academic_year=2026)
+        sessions = assemble_class_sessions(
+            raw, rooms, optional_subjects_set=set(), academic_year=2026, weeks=1
+        )
         self.assertEqual(len(sessions), 1)
         s = sessions[0]
         self.assertEqual(s["subject"], "Interactiunea om-calculator")
@@ -190,13 +201,39 @@ class TestUniTrackScraper(unittest.TestCase):
         self.assertFalse(s["is_optional"])
 
         # Check deterministic ID stability
-        sessions_again = assemble_class_sessions(raw, rooms, optional_subjects_set=set(), academic_year=2026)
+        sessions_again = assemble_class_sessions(
+            raw, rooms, optional_subjects_set=set(), academic_year=2026, weeks=1
+        )
         self.assertEqual(sessions[0]["id"], sessions_again[0]["id"])
+
+        # Full-semester expansion: 14 weekly sessions, 7 odd ('sapt. 1'), 7 even ('sapt. 2')
+        multi_raw = [
+            {**raw[0], "subject": "Weekly Course", "frequency": ""},
+            {**raw[0], "subject": "Odd Course", "frequency": "sapt. 1"},
+            {**raw[0], "subject": "Even Course", "frequency": "sapt. 2"},
+        ]
+        semester_sessions = assemble_class_sessions(
+            multi_raw,
+            rooms,
+            optional_subjects_set=set(),
+            academic_year=2026,
+            weeks=14,
+        )
+        weekly = [x for x in semester_sessions if x["subject"] == "Weekly Course"]
+        odd = [x for x in semester_sessions if x["subject"] == "Odd Course"]
+        even = [x for x in semester_sessions if x["subject"] == "Even Course"]
+        self.assertEqual(len(weekly), 14)
+        self.assertEqual(len(odd), 7)
+        self.assertEqual(len(even), 7)
+        # Unique deterministic ID across weeks
+        self.assertEqual(len({x["id"] for x in weekly}), 14)
+        self.assertEqual(odd[0]["start_time"].date(), date(2026, 9, 28))
+        self.assertEqual(even[0]["start_time"].date(), date(2026, 10, 5))
 
     def test_seed_database_and_refresh_preserves_attendance(self):
         result = seed_database(db=self.db)
         self.assertEqual(result["status"], "success")
-        self.assertGreater(result["sessions_seeded"], 50)
+        self.assertGreater(result["sessions_seeded"], 500)
         self.assertGreater(result["users_seeded"], 0)
 
         student = self.db.query(User).filter_by(role="student").first()
@@ -211,13 +248,28 @@ class TestUniTrackScraper(unittest.TestCase):
             class_session_id=session.id,
             status="Present",
         )
+        # Stale unreferenced session should be cleaned up on refresh; referenced ones stay
+        stale_session = ClassSession(
+            id="stale-unreferenced-session",
+            subject="Obsolete Class",
+            start_time=datetime(2026, 9, 28, 10, 0),
+            end_time=datetime(2026, 9, 28, 12, 0),
+            building_name="Old Building",
+            target_lat=46.7679,
+            target_lng=23.5898,
+            required_group="933/1",
+            is_optional=False,
+        )
         self.db.add(record)
+        self.db.add(stale_session)
         self.db.commit()
 
-        # refresh_schedule must NOT destroy attendance data
+        # refresh_schedule must NOT destroy attendance data, while pruning unreferenced stale sessions
         refresh_result = refresh_schedule(db=self.db)
         self.assertEqual(refresh_result["status"], "success")
         self.assertEqual(refresh_result["attendance_records_preserved"], 1)
+        self.assertGreaterEqual(refresh_result["sessions_deleted"], 1)
+        self.assertIsNone(self.db.get(ClassSession, "stale-unreferenced-session"))
 
         saved_record = self.db.query(AttendanceRecord).filter_by(id="test-att-1").first()
         self.assertIsNotNone(saved_record)
@@ -246,6 +298,12 @@ class TestUniTrackScraper(unittest.TestCase):
         post_refresh = client.post("/api/schedule/refresh")
         self.assertEqual(post_refresh.status_code, 200)
         self.assertEqual(post_refresh.json()["status"], "success")
+
+    @patch("scraper.resolve_semester", return_value=None)
+    def test_refresh_skips_during_non_academic_months(self, _mock_sem):
+        result = refresh_schedule(db=self.db)
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["sessions_created"], 0)
 
 
 if __name__ == "__main__":
