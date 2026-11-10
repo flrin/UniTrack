@@ -23,6 +23,7 @@ export default function DashboardPage({
   const [scheduleError, setScheduleError] = useState<Error | null>(null)
   const now = useNow()
   const { statuses, location, error: heartbeatError } = useAttendanceHeartbeat(schedule)
+  const optionalsKey = JSON.stringify(config.optionals)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -44,7 +45,7 @@ export default function DashboardPage({
     return () => {
       controller.abort()
     }
-  }, [config])
+  }, [config.group, optionalsKey])
 
   // Show the status the heartbeat last got back from the backend.
   const scheduleWithStatus = useMemo(

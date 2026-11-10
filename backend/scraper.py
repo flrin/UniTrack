@@ -25,12 +25,6 @@ from utils import (
     resolve_semester,
 )
 
-_INITIAL_SEMESTER = resolve_semester() or 1
-DEFAULT_CLASSROOMS_URL = build_classrooms_url(semester=_INITIAL_SEMESTER)
-DEFAULT_STUDENT_SCHEDULE_URL = build_student_schedule_url("IE3", semester=_INITIAL_SEMESTER)
-DEFAULT_TEACHER_SCHEDULE_URL = build_teacher_schedule_url("mogr1", semester=_INITIAL_SEMESTER)
-DEFAULT_OPTIONALS_PAGE_URL = build_optionals_page_url()
-
 # Day mapping for Romanian schedule days (0 = Monday, ..., 4 = Friday)
 RO_DAY_MAP = {
     "luni": 0,
