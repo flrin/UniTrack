@@ -1,0 +1,128 @@
+.schedule-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+}
+
+.schedule-item {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #cbd5e1;
+  border-radius: 10px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 170px 1fr auto;
+  padding: 14px 16px;
+}
+
+.schedule-item.status-active {
+  background: #f0fdf4;
+  border-color: #a7f3d0;
+  border-left-color: #10b981;
+}
+
+.schedule-item.status-ended {
+  opacity: 0.8;
+}
+
+.schedule-time {
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.schedule-subject {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.schedule-building {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin-top: 2px;
+}
+
+.schedule-statuses {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedule-empty {
+  color: #64748b;
+  margin: 20px 0 0;
+}
+
+.status-badge {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.8rem;
+  font-weight: 650;
+  gap: 6px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+/* Waiting / Pending */
+.status-badge.status-waiting,
+.status-badge.status-pending {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+/* Tracking Active / Present */
+.status-badge.status-active,
+.status-badge.status-present {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+/* Ended */
+.status-badge.status-ended {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* Missed / Left Early */
+.status-badge.status-missed {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.status-dot {
+  animation: status-pulse 1.4s ease-in-out infinite;
+  background: #10b981;
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .schedule-item {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .schedule-statuses {
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

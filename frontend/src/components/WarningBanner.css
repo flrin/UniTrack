@@ -1,0 +1,31 @@
+.warning-banner {
+  align-items: center;
+  background: #fff1f2;
+  border: 2px solid #be123c;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgb(190 18 60 / 18%);
+  box-sizing: border-box;
+  color: #881337;
+  display: flex;
+  gap: 14px;
+  margin: 0 auto 24px;
+  max-width: 900px;
+  padding: 14px 18px;
+  position: sticky;
+  top: 12px;
+  /* Above the Leaflet map panes (z-index up to 1000). */
+  z-index: 1100;
+}
+
+.warning-banner p {
+  font-size: 1rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.warning-banner-icon {
+  color: #be123c;
+  flex-shrink: 0;
+  font-size: 1.6rem;
+  line-height: 1;
+}

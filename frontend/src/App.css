@@ -216,6 +216,12 @@ input[type='radio'] {
   margin: 8px 0 4px;
 }
 
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .dashboard-header p {
   color: #64748b;
 }
