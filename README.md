@@ -20,7 +20,7 @@ fastapi dev main.py
 
 #### Seeding & Ingestion Pipeline
 
-The backend features an automated scraping and ingestion pipeline (`scraper.py`) that parses faculty schedules, classroom locations, and optional course PDFs, normalizes dates/times, and seeds the SQLite database (`unitrack.db`).
+The backend features an automated scraping and ingestion pipeline (`scraper.py`) that parses faculty schedules, classroom locations, and optional course PDFs, normalizes dates/times, and seeds the database with the required records for students, teachers, and class sessions.
 
 - **CLI execution:**
   ```Shell
@@ -44,7 +44,7 @@ python -m unittest test_scraper.py
 | --- | --- | --- |
 | `DATABASE_URL` | SQLAlchemy database connection string | `sqlite:///./unitrack.db` |
 | `ACADEMIC_YEAR` | Calendar year for the academic term (anchors semester week 1 to Monday of week containing Oct 1) | `2026` |
-| `GOOGLE_MAPS_API_KEY` | Optional API key for Google Maps Geocoding API (`GOOGLE_GEOCODING_API_KEY` / `GOOGLE_API_KEY` also accepted; falls back to campus coordinates if unset) | *None* (uses campus coordinates fallback) |
+| `GOOGLE_MAPS_API_KEY` | Optional API key for Google Maps Geocoding API (`GOOGLE_GEOCODING_API_KEY` / `GOOGLE_API_KEY` also accepted; falls back to campus coordinates if unset) | *None* (uses campus-building fallback logic) |
 
 # PROJECT CONTEXT
 **Read this entire document before generating code. Do not hallucinate API endpoints, data models, or tech stack choices. Stick strictly to the architecture, schemas, and contracts defined below.**
@@ -88,16 +88,16 @@ A role-based web application for automated university attendance using HTML5 Geo
 
 The `scraper.py` pipeline handles base schedules, room mappings, optional (elective) courses, time normalization, and database seeding:
 
-* **Group Code Logic:** A student's group dictates their specialization and year. For example, in group `933`: the first digit (`9`) represents the specialization (Informatica Engleza), the second digit (`3`) represents the year, and the third digit (`3`) represents the specific group.
+* **Group Code Logic:** A student's group dictates their specialization and year. For example, in group `933`: the first digit (`9`) represents the specialization (Informatica Engleza), the second digit (`3`) is the year, and the grouping logic is normalized into a base group and semi-group model.
 * **Student Schedules:** `https://www.cs.ubbcluj.ro/files/orar/2026-1/tabelar/IE3.html`
-  * Contains multiple HTML tables grouped by subgroup headers (e.g., `<h1>Grupa 931</h1>`) to extract base classes and subgroup-specific labs (e.g., group `933/1` vs `933/2`, base group `933`, or year `IE3`).
+  * Contains multiple HTML tables grouped by subgroup headers (e.g., `<h1>Grupa 931</h1>`) to extract base classes and subgroup-specific labs (e.g., group `933/1` vs `933/2`, base group `933`, or year-level classes like `IE3`).
 * **Teacher Schedules:** `https://www.cs.ubbcluj.ro/files/orar/2026-1/cadre/mogr1.html`
   * Data is housed in a table with columns: Ziua, Orele, Frecventa, Sala, Anul, Formatia, Tipul, Disciplina.
 * **Classroom Locations & Geocoding:** `https://www.cs.ubbcluj.ro/files/orar/2026-1/sali/legenda.html`
   * HTML table mapping the shortcode `Sala` to the physical `Localizarea`.
-  * Geocodes addresses primarily via the Google Maps Geocoding API if `GOOGLE_MAPS_API_KEY` is configured, with built-in fallbacks for known UBB buildings (Cantemir, FSEGA, Mathematica, NTT Data, Litere, Observator, Avram Iancu, Chimie, Sociologie, Codespring, MHP, Central UBB) and in-memory caching.
+  * Geocodes addresses primarily via the Google Maps Geocoding API if `GOOGLE_MAPS_API_KEY` is configured, with built-in fallbacks for known UBB buildings (Cantemir, FSEGA, Mathematica, NTT Data, etc.).
 * **Optional Courses (Electives):** `https://www.cs.ubbcluj.ro/lista-cursurilor-optionale-alese-pentru-anul-universitar-2026-2027/`
-  * The scraper navigates to this page, targets `<td class="lyf_td_filename">` elements, and extracts links to elective PDFs. The backend downloads these PDFs in memory using `pypdf`, extracts course codes (`ML...`) and Romanian/English subject names, and maps them to specialization digits (`9` = Informatica Engleza, `2` = Informatica Romana, etc.).
+  * The scraper navigates to this page, targets `<td class="lyf_td_filename">` elements, and extracts links to elective PDFs. The backend downloads these PDFs in memory using `pypdf`, extracts course metadata, and stores the subject mapping as part of the student's configured electives.
 * **Academic Calendar & Time Normalization:**
   * Romanian days (`Luni`, `Marți`, etc.) and hours (e.g., `10-12`) are normalized into UTC datetime objects.
   * Week 1 of the semester is automatically anchored to the Monday–Sunday week containing October 1 for the configured `ACADEMIC_YEAR` (default `2026`).
@@ -171,7 +171,7 @@ Frontend and Backend teams must adhere to these exact endpoints and payloads.
 
 * **Endpoint:** `GET /api/student/schedule`
 * **Headers:** `Authorization: Bearer <token>`
-* **Backend Logic:** Return classes where `required_group` matches the user's full semi-group (`933/1`), their base group (`933`), the entire year/specialization (`IE3`), AND any `is_optional` classes that match the strings in their `optionals` array.
+* **Backend Logic:** Return classes where `required_group` matches the user's full semi-group (`933/1`), their base group (`933`), the entire year/specialization (`IE3`), AND any `is_optional` classes selected in `optionals`.
 * **Response (200 OK):**
 ```json
 [
@@ -197,11 +197,18 @@ Frontend and Backend teams must adhere to these exact endpoints and payloads.
 * **Endpoint:** `GET /api/teacher/classes`
 * **Endpoint:** `GET /api/teacher/roster/{class_id}`
 
-### 5. Ingestion & Schedule Management
+### 5. Teacher Attendance Override
+
+* **Endpoint:** `POST /api/teacher/override`
+* **Payload:** `{"class_id": "uuid", "user_id": "uuid"}`
+* **Backend Logic:** Allows a teacher to manually mark a student as present for a specific class. The backend must set the student's `AttendanceRecord.status` to `"Present"` and set the record's `override` flag to `true` for that class. This is a teacher-confirmed override and should not be silently replaced by later GPS heartbeat updates while the override is active.
+* **Response (200 OK):** `{"message": "Attendance overridden"}`
+
+### 6. Ingestion & Schedule Management
 
 * **Seed Database:**
   * **Endpoint:** `POST /api/seed`
-  * **Backend Logic:** Triggers the scraper and database seeding pipeline on demand. Seeds classrooms, sessions, and default test users (`John Doe`, group `933/1` student; `Grigoreta Cojocar` teacher). Preserves existing attendance records.
+  * **Backend Logic:** Triggers the scraper and database seeding pipeline on demand. Seeds classrooms, sessions, and default test users (`John Doe`, group `933/1` student; `Grigoreta Cojocar` teacher).
   * **Response (200 OK):**
     ```json
     {
@@ -234,7 +241,7 @@ Frontend and Backend teams must adhere to these exact endpoints and payloads.
     ```
 
 ## UI/UX & Thematic Guidelines
-All frontend components must strictly adhere to a unified "Clean Light Blue" design system. Do not invent custom color palettes, CSS frameworks, or dark mode overrides. Use standard Tailwind CSS classes (or equivalent raw CSS) matching these exact specifications:
+All frontend components must strictly adhere to a unified "Clean Light Blue" design system. Do not invent custom color palettes, CSS frameworks, or dark mode overrides. Use standard Tailwind CSS classes and keep the interface consistent across student and teacher flows.
 
 *   **Global Theme:** Strictly Light Mode. Do not write or generate `dark:` class variants.
 *   **Color Palette:**
@@ -257,5 +264,5 @@ All frontend components must strictly adhere to a unified "Clean Light Blue" des
 
 1. **Parallel Execution:** Frontend components MUST be built using mock JSON objects based on the API Contracts above before wiring up the real HTTP fetches.
 2. **No Extraneous Features:** Do not write code for background location tracking plugins, GPS spoofing prevention, or advanced caching. Follow the MVP scope exactly.
-3. **Automated Heartbeat Logic (Critical):** There are NO "Check In" or "Start Class" buttons on the student UI. The frontend must automatically check the current device time against the scheduled `start_time` and `end_time` of the student's classes. When an active class window is reached, automatically initiate the 60-second `setInterval` GPS heartbeat.
+3. **Automated Heartbeat Logic (Critical):** There are NO "Check In" or "Start Class" buttons on the student UI. The frontend must automatically check the current device time against the schedule and send the geolocation heartbeat at a fixed 60-second cadence when a student is currently in an active class window.
 4. **UX Constraints:** The student UI MUST include a permanent, highly visible warning advising them NOT to lock their screen or close the tab while the class is active.
