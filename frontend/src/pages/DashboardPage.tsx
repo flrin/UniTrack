@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import AppHeader from '../components/AppHeader'
+import LocationOverridePanel from '../components/LocationOverridePanel'
 import MapView from '../components/MapView'
 import ScheduleList from '../components/ScheduleList'
 import WarningBanner from '../components/WarningBanner'
 import { useAttendanceHeartbeat } from '../hooks/useAttendanceHeartbeat'
 import { useNow } from '../hooks/useNow'
+import { GeolocationError, type GeoPoint } from '../services/geolocationService'
 import { getStudentSchedule } from '../services/studentService'
 import type { ScheduleItem, StudentConfig } from '../types/student'
-import { getRelevantClass } from '../utils/classTime'
+import { getActiveClasses, getRelevantClass } from '../utils/classTime'
+import {
+  buildBuildingPresets,
+  findMatchingBuildingPreset,
+  generateRandomClujLocation,
+  type LocationOverrideState,
+} from '../utils/locationOverride'
 
 export default function DashboardPage({
   config,
@@ -21,8 +29,31 @@ export default function DashboardPage({
   const [schedule, setSchedule] = useState<ScheduleItem[]>([])
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(true)
   const [scheduleError, setScheduleError] = useState<Error | null>(null)
+  const [overrideState, setOverrideState] = useState<LocationOverrideState>({
+    mode: 'gps',
+  })
   const now = useNow()
-  const { statuses, location, error: heartbeatError } = useAttendanceHeartbeat(schedule)
+
+  const buildingPresets = useMemo(
+    () => buildBuildingPresets(schedule),
+    [schedule],
+  )
+
+  const locationOverride = useMemo<GeoPoint | null>(() => {
+    if (overrideState.mode === 'gps') return null
+    if (overrideState.mode === 'random-cluj') return overrideState.point
+    const preset =
+      buildingPresets.find((item) => item.id === overrideState.buildingId) ??
+      buildingPresets[0]
+    return preset ? { lat: preset.lat, lng: preset.lng } : null
+  }, [overrideState, buildingPresets])
+
+  const {
+    statuses,
+    location,
+    lastCheckIns,
+    error: heartbeatError,
+  } = useAttendanceHeartbeat(schedule, { locationOverride })
   const optionalsKey = JSON.stringify(config.optionals)
 
   useEffect(() => {
@@ -58,6 +89,60 @@ export default function DashboardPage({
     [scheduleWithStatus, now],
   )
 
+  const hasActiveClass = useMemo(
+    () => getActiveClasses(scheduleWithStatus, now).length > 0,
+    [scheduleWithStatus, now],
+  )
+
+  const relevantLastCheckIn = relevantClass
+    ? (lastCheckIns[relevantClass.class_id] ?? null)
+    : null
+
+  const visibleHeartbeatError =
+    locationOverride && heartbeatError instanceof GeolocationError
+      ? null
+      : heartbeatError
+
+  const defaultBuildingId =
+    (relevantClass
+      ? findMatchingBuildingPreset(buildingPresets, {
+          lat: relevantClass.target_lat,
+          lng: relevantClass.target_lng,
+        })?.id
+      : undefined) ??
+    buildingPresets[0]?.id ??
+    ''
+
+  const selectedBuildingId =
+    overrideState.mode === 'building'
+      ? overrideState.buildingId
+      : defaultBuildingId
+
+  const handleSelectGps = () => {
+    setOverrideState({ mode: 'gps' })
+  }
+
+  const handleSelectBuilding = (buildingId: string) => {
+    setOverrideState({ mode: 'building', buildingId })
+  }
+
+  const handleRandomCluj = () => {
+    const avoidPoints: GeoPoint[] = buildingPresets.map((item) => ({
+      lat: item.lat,
+      lng: item.lng,
+    }))
+    if (relevantClass) {
+      avoidPoints.push({
+        lat: relevantClass.target_lat,
+        lng: relevantClass.target_lng,
+      })
+    }
+    setOverrideState({
+      mode: 'random-cluj',
+      point: generateRandomClujLocation(avoidPoints),
+    })
+  }
+
   return (
     <main className="dashboard-page">
       <AppHeader group={config.group} onEditConfig={onEditConfig} onLogout={onLogout} />
@@ -73,9 +158,9 @@ export default function DashboardPage({
             {scheduleError.message}
           </p>
         )}
-        {heartbeatError && (
+        {visibleHeartbeatError && (
           <p className="error-message" role="alert">
-            {heartbeatError.message}
+            {visibleHeartbeatError.message}
           </p>
         )}
         {isLoadingSchedule ? (
@@ -90,6 +175,18 @@ export default function DashboardPage({
           </div>
         )}
       </section>
+      <LocationOverridePanel
+        buildingPresets={buildingPresets}
+        effectiveLocation={location}
+        hasActiveClass={hasActiveClass}
+        lastCheckIn={relevantLastCheckIn}
+        mode={overrideState.mode}
+        onRandomCluj={handleRandomCluj}
+        onSelectBuilding={handleSelectBuilding}
+        onSelectGps={handleSelectGps}
+        relevantClass={relevantClass}
+        selectedBuildingId={selectedBuildingId}
+      />
       <section className="dashboard-card map-card">
         <h2>Class building</h2>
         <p className="intro">
@@ -101,6 +198,7 @@ export default function DashboardPage({
           <>
             <MapView
               buildingName={relevantClass.building_name}
+              isOverridden={locationOverride !== null}
               targetLat={relevantClass.target_lat}
               targetLng={relevantClass.target_lng}
               userLat={location?.lat}

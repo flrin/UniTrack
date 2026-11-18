@@ -12,8 +12,12 @@ const CLOCK_CHECK_INTERVAL_MS = 1_000
 export type TrackableClass = ClassWindow & { class_id: string }
 
 export type HeartbeatManagerOptions = {
-  /** Called after each successful check-in with the backend's response. */
-  onCheckIn?: (classId: string, response: CheckInResponse) => void
+  /** Called after each successful check-in with the backend's response and payload sent. */
+  onCheckIn?: (
+    classId: string,
+    response: CheckInResponse,
+    payload: CheckInPayload,
+  ) => void
   /** Called whenever a GPS fix succeeds during a tracked heartbeat. */
   onLocation?: (position: GeoPoint) => void
   /** Called when reading the GPS or sending the check-in fails. */
@@ -36,11 +40,14 @@ export type HeartbeatManager = {
   stop: () => void
   /** Replaces the classes to watch; takes effect immediately if started. */
   setClasses: (classes: readonly TrackableClass[]) => void
+  /** Immediately sends a heartbeat for active tracked classes, superseding any in-flight beat. */
+  triggerHeartbeat: () => void
 }
 
 type TrackedClass = {
   intervalId: ReturnType<typeof setInterval>
   inFlight: boolean
+  epoch: number
 }
 
 function toError(error: unknown): Error {
@@ -83,9 +90,9 @@ export function createHeartbeatManager(
     notifyTrackingChange()
   }
 
-  async function heartbeat(classId: string, tracked: TrackedClass) {
-    // Skip a beat that is still waiting on the previous GPS fix or request.
-    if (tracked.inFlight) return
+  async function heartbeat(classId: string, tracked: TrackedClass, force = false) {
+    // Skip scheduled ticks while still waiting on the previous GPS fix or request.
+    if (!force && tracked.inFlight) return
 
     // Timers can fire late (throttled tabs), so re-check the window first.
     const item = classes.find((candidate) => candidate.class_id === classId)
@@ -94,25 +101,28 @@ export function createHeartbeatManager(
       return
     }
 
-    const isStillTracked = () => tracking.get(classId) === tracked
+    const beatEpoch = ++tracked.epoch
+    const isCurrentBeat = () =>
+      tracking.get(classId) === tracked && tracked.epoch === beatEpoch
     tracked.inFlight = true
 
     try {
       const position = await getPosition()
-      // The class may have ended while waiting for the GPS fix.
-      if (!isStillTracked()) return
+      // The class may have ended or a newer forced beat superseded this one.
+      if (!isCurrentBeat()) return
       onLocation?.(position)
 
-      const response = await send({
+      const payload: CheckInPayload = {
         class_id: classId,
         user_lat: position.lat,
         user_lng: position.lng,
-      })
-      if (isStillTracked()) onCheckIn?.(classId, response)
+      }
+      const response = await send(payload)
+      if (isCurrentBeat()) onCheckIn?.(classId, response, payload)
     } catch (error) {
-      if (isStillTracked()) onError?.(classId, toError(error))
+      if (isCurrentBeat()) onError?.(classId, toError(error))
     } finally {
-      tracked.inFlight = false
+      if (tracked.epoch === beatEpoch) tracked.inFlight = false
     }
   }
 
@@ -122,6 +132,7 @@ export function createHeartbeatManager(
         void heartbeat(classId, tracked)
       }, heartbeatIntervalMs),
       inFlight: false,
+      epoch: 0,
     }
 
     tracking.set(classId, tracked)
@@ -161,6 +172,22 @@ export function createHeartbeatManager(
     setClasses(nextClasses) {
       classes = nextClasses
       if (watcherId !== undefined) syncWithClock()
+    },
+
+    triggerHeartbeat() {
+      if (watcherId === undefined) return
+      const previouslyTracked = [...tracking.keys()]
+      syncWithClock()
+
+      for (const classId of previouslyTracked) {
+        const tracked = tracking.get(classId)
+        if (!tracked) continue
+        clearInterval(tracked.intervalId)
+        tracked.intervalId = setInterval(() => {
+          void heartbeat(classId, tracked)
+        }, heartbeatIntervalMs)
+        void heartbeat(classId, tracked, true)
+      }
     },
   }
 }

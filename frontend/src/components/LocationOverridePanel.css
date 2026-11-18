@@ -1,0 +1,214 @@
+.override-card {
+  margin-top: 24px;
+  background: #ff6a00;
+  border: 3px solid #e05300;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(255, 106, 0, 0.35);
+  color: #ffffff;
+}
+
+.override-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.override-header h2 {
+  color: #ffffff;
+  margin-bottom: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.override-card .intro {
+  color: #fff7ed;
+  opacity: 0.95;
+}
+
+.override-pill {
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  white-space: nowrap;
+}
+
+.override-pill-gps {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.override-pill-active {
+  background: #ffffff;
+  color: #ea580c;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.override-mode-group {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.override-mode-button {
+  background: #ffffff;
+  border: 2px solid #fdba74;
+  border-radius: 10px;
+  color: #9a3412;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 10px 12px;
+  text-align: center;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.override-mode-button:hover {
+  background: #fff7ed;
+  border-color: #ea580c;
+  color: #7c2d12;
+}
+
+.override-mode-button.selected {
+  background: #7c2d12;
+  border-color: #ffffff;
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+
+.override-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.override-label {
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.override-select {
+  background: #ffffff;
+  border: 2px solid #fdba74;
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: #1e293b;
+  font-weight: 600;
+  padding: 10px 12px;
+  width: 100%;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.override-select:focus {
+  border-color: #7c2d12;
+  outline: 3px solid rgba(255, 255, 255, 0.6);
+}
+
+.override-random-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.override-coords-chip {
+  background: #ffffff;
+  border: 2px solid #fdba74;
+  border-radius: 8px;
+  color: #9a3412;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  padding: 8px 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.override-random-row .secondary-button {
+  background: #ffffff;
+  border: 2px solid #fdba74;
+  color: #9a3412;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.override-random-row .secondary-button:hover {
+  background: #fff7ed;
+  border-color: #ea580c;
+  color: #7c2d12;
+}
+
+.override-status {
+  background: #ffffff;
+  border: 2px solid #fed7aa;
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  color: #1e293b;
+}
+
+.override-status-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.override-status-label {
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.override-status-value {
+  color: #1e293b;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.override-backend-note {
+  color: #64748b;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.override-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.override-actions .secondary-button {
+  background: #ffffff;
+  border: 2px solid #ffffff;
+  color: #ea580c;
+  font-weight: 700;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+.override-actions .secondary-button:hover {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+@media (max-width: 600px) {
+  .override-mode-group {
+    grid-template-columns: 1fr;
+  }
+
+  .override-status-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
