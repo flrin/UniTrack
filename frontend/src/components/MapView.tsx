@@ -10,6 +10,7 @@ type MapViewProps = {
   userLng?: number | null
   buildingName?: string
   radius?: number
+  isOverridden?: boolean
 }
 
 const userLocationIcon = L.divIcon({
@@ -19,12 +20,39 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [10, 10],
 })
 
-function MapCenterUpdater({ lat, lng }: { lat: number; lng: number }) {
+function MapCenterUpdater({
+  targetLat,
+  targetLng,
+  userLat,
+  userLng,
+}: {
+  targetLat: number
+  targetLng: number
+  userLat?: number | null
+  userLng?: number | null
+}) {
   const map = useMap()
 
   useEffect(() => {
-    map.setView([lat, lng])
-  }, [map, lat, lng])
+    if (
+      typeof userLat === 'number' &&
+      Number.isFinite(userLat) &&
+      typeof userLng === 'number' &&
+      Number.isFinite(userLng) &&
+      typeof map.fitBounds === 'function'
+    ) {
+      map.fitBounds(
+        [
+          [targetLat, targetLng],
+          [userLat, userLng],
+        ],
+        { padding: [48, 48], maxZoom: 16 },
+      )
+      return
+    }
+
+    map.setView([targetLat, targetLng], 16)
+  }, [map, targetLat, targetLng, userLat, userLng])
 
   return null
 }
@@ -36,6 +64,7 @@ export default function MapView({
   userLng,
   buildingName,
   radius = 100,
+  isOverridden = false,
 }: MapViewProps) {
   const targetPosition: LatLngTuple = [targetLat, targetLng]
   const hasUserLocation =
@@ -50,7 +79,12 @@ export default function MapView({
   return (
     <div className="map-view">
       <MapContainer center={targetPosition} zoom={16} scrollWheelZoom={false}>
-        <MapCenterUpdater lat={targetLat} lng={targetLng} />
+        <MapCenterUpdater
+          targetLat={targetLat}
+          targetLng={targetLng}
+          userLat={userLat}
+          userLng={userLng}
+        />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -64,7 +98,7 @@ export default function MapView({
         </Circle>
         {userPosition && (
           <Marker icon={userLocationIcon} position={userPosition}>
-            <Popup>Your current location</Popup>
+            <Popup>{isOverridden ? 'Overridden location' : 'Your current location'}</Popup>
           </Marker>
         )}
       </MapContainer>
